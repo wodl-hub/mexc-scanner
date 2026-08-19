@@ -119,8 +119,14 @@ class OddsApiClient:
                                     "key": bm.get("key"),
                                     "updated": bm.get("last_update"),
                                     "outcomes": outcomes,
+                                    "url": "https://www.pinnacle.com/ru/"
+                                    if (bm.get("key") or "").lower() == "pinnacle"
+                                    else "",
                                 }
                             )
+                books.sort(
+                    key=lambda b: 0 if (b.get("key") or "").lower() == "pinnacle" else 1
+                )
                 games.append(
                     {
                         "id": game.get("id"),

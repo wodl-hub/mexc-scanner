@@ -129,6 +129,17 @@ def test_accent_and_nickname_match():
     assert pair_score("Jets", "Steelers", "New York", "Pittsburgh") >= 0.9
 
 
+def test_my_books_catalog():
+    from polyhedge.my_books import CATALOG, resolve_catalog
+
+    names = {b["name"] for b in CATALOG}
+    assert names == {"Stake", "Pinnacle", "CSGOEmpire", "Mellstroy", "Roobet", "Shuffle"}
+    pin = next(b for b in CATALOG if b["key"] == "pinnacle")
+    assert pin["mode"] == "odds_api"
+    custom = resolve_catalog({"book_urls": {"stake": "https://stake.com/sports"}})
+    assert next(b for b in custom if b["key"] == "stake")["url"] == "https://stake.com/sports"
+
+
 def test_smarkets_ticks_to_decimal():
     from polyhedge.smarkets import ticks_to_decimal
 

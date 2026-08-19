@@ -25,6 +25,7 @@ DEFAULT_SETTINGS = {
     "polymarket_funder": "",
     "signature_type": 2,
     "stake_mirror": "",
+    "book_urls": {},
     "sound": True,
     "auto_refresh_sec": 20,
     "min_roi": 0.0,
@@ -59,7 +60,11 @@ def load_settings() -> dict:
 def save_settings(patch: dict) -> dict:
     current = load_settings()
     for key in DEFAULT_SETTINGS:
-        if key in patch and patch[key] is not None:
+        if key not in patch or patch[key] is None:
+            continue
+        if key == "book_urls" and isinstance(patch[key], dict):
+            current[key] = {**(current.get("book_urls") or {}), **patch[key]}
+        else:
             current[key] = patch[key]
     _write(SETTINGS_PATH, current)
     return current
@@ -80,6 +85,7 @@ def public_settings() -> dict:
         "odds_api_key": ("*" * 4 + odds[-4:]) if len(odds) > 6 else odds,
         "sx_api_key": ("*" * 4 + sx[-4:]) if len(sx) > 6 else sx,
         "telegram_bot_token": ("*" * 4 + tg[-4:]) if len(tg) > 6 else tg,
+        "book_urls": s.get("book_urls") or {},
     }
 
 

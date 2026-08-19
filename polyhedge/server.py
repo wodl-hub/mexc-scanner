@@ -21,6 +21,7 @@ from polyhedge.alerts import send_telegram
 from polyhedge.kalshi import KalshiClient
 from polyhedge.math_arb import break_even_decimal_odds, hedge_cover, quote_fork
 from polyhedge.matcher import all_book_legs, all_game_matches
+from polyhedge.my_books import resolve_catalog
 from polyhedge.odds_api import TAG_TO_SPORTS, OddsApiClient
 from polyhedge.polymarket import PolymarketClient
 from polyhedge.smarkets import SmarketsClient
@@ -237,6 +238,7 @@ class SettingsIn(BaseModel):
     polymarket_funder: str | None = None
     signature_type: int | None = None
     stake_mirror: str | None = None
+    book_urls: dict[str, str] | None = None
     sound: bool | None = None
     auto_refresh_sec: int | None = None
     min_roi: float | None = None
@@ -295,12 +297,18 @@ async def health():
         "sound": bool(s.get("sound")),
         "auto_refresh_sec": s.get("auto_refresh_sec") or 20,
         "disclaimer": "Profit is locked only after both legs fill. Local tool, not financial advice.",
+        "my_books": [b["name"] for b in resolve_catalog(s)],
     }
 
 
 @app.get("/api/settings")
 async def get_settings():
     return public_settings()
+
+
+@app.get("/api/books")
+async def list_books():
+    return {"rows": resolve_catalog(load_settings()), "odds_api": bool(odds_client())}
 
 
 @app.post("/api/settings")
@@ -388,6 +396,7 @@ async def scan(
             continue
         matched_games = all_game_matches(event.get("home"), event.get("away"), games) if games else []
         manuals = [m for m in manual_rows if m.get("event_id") == event["id"]]
+        urls = {b["name"]: b["url"] for b in resolve_catalog(load_settings())}
         if manuals:
             matched_games.append(
                 {
@@ -399,7 +408,7 @@ async def scan(
                             "book": m.get("book"),
                             "key": "manual",
                             "outcomes": {m.get("team"): m.get("odds")},
-                            "url": m.get("url") or "",
+                            "url": m.get("url") or urls.get(m.get("book") or "", ""),
                         }
                         for m in manuals
                     ],
@@ -652,6 +661,9 @@ async def manual_list(event_id: str | None = None):
 async def manual_add(body: ManualBookIn):
     rows = load_list(MANUAL_PATH)
     item = body.model_dump()
+    if not item.get("url"):
+        urls = {b["name"]: b["url"] for b in resolve_catalog(load_settings())}
+        item["url"] = urls.get(item.get("book") or "", "")
     rows = [
         r
         for r in rows

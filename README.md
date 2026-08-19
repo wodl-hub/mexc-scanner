@@ -53,6 +53,19 @@ pytest -q
 
 Если кэф БК ниже break-even — вилки нет, это направленный риск.
 
+## Мои БК
+
+В стол заведены ссылки:
+
+- Stake
+- Pinnacle (линия через [The Odds API](https://the-odds-api.com), если есть ключ)
+- CSGOEmpire
+- Mellstroy
+- Roobet
+- Shuffle
+
+У казино нет публичного odds API, HTML не парсится. На событии открываешь БК и вписываешь кэф в строку «Мои БК».
+
 ## Odds API
 
 Бесплатный ключ: https://the-odds-api.com  

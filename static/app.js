@@ -1,6 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const seen = new Set();
 const state = { rows: [], selected: null, pxMode: "cent", timer: null };
+let myBooks = [];
 
 function fmtPx(p) {
   const n = Number(p);
@@ -89,6 +90,7 @@ function renderRows() {
 
 function renderVenueBooks(row) {
   const box = $("venueBooks");
+  if (!box) return;
   const q0 = row.quotes[0];
   const books = (q0 && q0.books) || [];
   if (!books.length) {
@@ -101,6 +103,62 @@ function renderVenueBooks(row) {
     const href = b.url ? `<a href="${b.url}" target="_blank">${b.book}</a>` : b.book;
     return `<div class="mini-item"><span>${href} · ${b.team || ""} @ ${odds}</span><span class="${roiClass(b.fork ? b.fork.roi_pct : null)}">${roi}</span></div>`;
   }).join("");
+}
+
+function findBookHit(row, book) {
+  const q0 = (row.quotes && row.quotes[0]) || {};
+  const books = q0.books || [];
+  const names = [book.name, book.key, book.odds_key].filter(Boolean).map((x) => String(x).toLowerCase());
+  return books.find((b) => names.includes(String(b.book || "").toLowerCase()) || names.includes(String(b.key || "").toLowerCase()));
+}
+
+function renderMyBooks(row) {
+  const box = $("myBooks");
+  if (!box) return;
+  if (!row) {
+    box.textContent = "выберите рынок";
+    return;
+  }
+  const q0 = (row.quotes && row.quotes[0]) || {};
+  const team = q0.hedge_team || "";
+  if (!myBooks.length) {
+    box.textContent = "нет списка БК";
+    return;
+  }
+  box.innerHTML = myBooks.map((b) => {
+    const hit = findBookHit(row, b);
+    const odds = hit && hit.odds ? hit.odds : "";
+    const note = b.mode === "odds_api"
+      ? (odds ? "Odds API" : "нужен ключ Odds API или вставь кэф")
+      : "вставь кэф";
+    return `<div class="bk-row">
+      <a href="${b.url}" target="_blank" rel="noopener">${b.name}</a>
+      <span class="muted">${note}</span>
+      <input type="number" step="0.01" min="1.01" value="${odds}" placeholder="кэф" data-book="${b.name}" data-url="${b.url}" />
+      <button type="button" class="ghost bk-save">ок</button>
+    </div>`;
+  }).join("");
+  box.querySelectorAll(".bk-save").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const input = btn.parentElement.querySelector("input");
+      const odds = Number(input.value);
+      if (!odds || odds <= 1) return;
+      await getJson("/api/manual", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event_id: row.event_id,
+          book: input.dataset.book,
+          team,
+          odds,
+          url: input.dataset.url || "",
+        }),
+      });
+      $("limitOdds").value = odds;
+      $("calcForm").book_odds.value = odds;
+      scan({ keep: true });
+    });
+  });
 }
 
 async function selectRow(i) {
@@ -123,6 +181,7 @@ async function selectRow(i) {
     }
   }
   renderVenueBooks(row);
+  renderMyBooks(row);
   $("manualForm").team.value = q0 ? q0.hedge_team : "";
   const books = $("books");
   books.innerHTML = `<div class="muted">стакан…</div>`;
@@ -231,6 +290,23 @@ function setTab(name) {
   if (name === "settings") loadSettings();
 }
 
+function renderBookUrlFields(urls) {
+  const box = $("bookUrls");
+  if (!box || !myBooks.length) return;
+  box.innerHTML = myBooks.map((b) => `<label>${b.name}
+    <input data-book-url="${b.key}" value="${urls[b.key] || b.url}" />
+  </label>`).join("");
+}
+
+async function loadBooks() {
+  const data = await getJson("/api/books");
+  myBooks = data.rows || [];
+  const hint = $("myBooksHint");
+  if (hint && !data.odds_api) {
+    hint.textContent = "Pinnacle без ключа Odds API тоже руками. Остальные БК всегда руками — публичной линии нет.";
+  }
+}
+
 async function loadSettings() {
   const s = await getJson("/api/settings");
   const f = $("setForm");
@@ -241,6 +317,8 @@ async function loadSettings() {
   f.auto_refresh_sec.value = s.auto_refresh_sec || 20;
   f.sound.checked = !!s.sound;
   $("sound").checked = !!s.sound;
+  if (s.odds_api_key) f.odds_api_key.placeholder = s.odds_api_key;
+  renderBookUrlFields(s.book_urls || {});
 }
 
 $("calcForm").addEventListener("submit", async (e) => {
@@ -310,6 +388,7 @@ $("manualForm").addEventListener("submit", async (e) => {
   });
   scan({ keep: true });
 });
+$("placeLocal").addEventListener("click", async () => {
   const row = currentRow();
   if (!row) return;
   const q0 = row.quotes[0] || {};
@@ -383,7 +462,11 @@ $("setForm").addEventListener("submit", async (e) => {
     stake_mirror: f.stake_mirror.value,
     auto_refresh_sec: Number(f.auto_refresh_sec.value || 20),
     sound: f.sound.checked,
+    book_urls: {},
   };
+  document.querySelectorAll("[data-book-url]").forEach((el) => {
+    body.book_urls[el.dataset.bookUrl] = el.value;
+  });
   if (f.odds_api_key.value && !f.odds_api_key.value.startsWith("*")) body.odds_api_key = f.odds_api_key.value;
   if (f.sx_api_key.value && !f.sx_api_key.value.startsWith("*")) body.sx_api_key = f.sx_api_key.value;
   if (f.telegram_bot_token.value && !f.telegram_bot_token.value.startsWith("*")) body.telegram_bot_token = f.telegram_bot_token.value;
@@ -424,7 +507,9 @@ function armTimer() {
 }
 
 loadOrders();
-getJson("/api/health").then((h) => {
-  $("sound").checked = !!h.sound;
-  $("status").textContent = h.odds_api ? "Odds API" : "ручной режим";
-}).finally(() => { scan(); armTimer(); });
+loadBooks().finally(() => {
+  getJson("/api/health").then((h) => {
+    $("sound").checked = !!h.sound;
+    $("status").textContent = h.odds_api ? "Odds API · Pinnacle" : "мои БК руками";
+  }).finally(() => { scan(); armTimer(); });
+});

@@ -63,7 +63,14 @@ h2 { margin: 0; font-size: 11px; letter-spacing: .08em; text-transform: uppercas
 .calc-out dl { display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; margin: 0; }
 .calc-out dt { color: var(--muted); }
 .mini-list { font-size: 12px; max-height: 220px; overflow: auto; }
-.mini-item { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.my-books { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.bk-row {
+  display: grid; grid-template-columns: 110px 1fr auto auto; gap: 6px; align-items: center;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px;
+}
+.bk-row a { color: var(--gold); font-weight: 600; }
+.bk-row input { width: 88px; }
+.bk-row .muted { font-size: 11px; }
 .view { min-height: calc(100vh - 90px); }
 .settings { max-width: 640px; margin: 16px; }
 .inline { display: flex; flex-direction: row; flex-wrap: wrap; gap: 8px; }

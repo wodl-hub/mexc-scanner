@@ -112,28 +112,21 @@
           <button type="button" id="placeLocal">поставить лимитку в журнал</button>
         </div>
         <div class="books" id="books"></div>
-        <div class="pane-head"><h2>Кэфы площадок</h2></div>
-        <div id="venueBooks" class="mini-list muted">нет совпадений</div>
+        <div class="pane-head"><h2>Мои БК</h2></div>
+        <p class="muted" id="myBooksHint">Stake, Empire, Roobet, Shuffle, Mellstroy — кэф руками. Pinnacle подтягивается через Odds API.</p>
+        <div id="myBooks" class="my-books muted">выберите рынок</div>
         <form id="manualForm" class="calc">
-          <label>БК
+          <label>Другая БК
             <select name="book">
-              <option>Stake</option>
-              <option>Pinnacle</option>
-              <option>Empire</option>
-              <option>Duel</option>
-              <option>Roobet</option>
-              <option>BC.Game</option>
-              <option>Mellstroy</option>
               <option>1xBet</option>
               <option>Betfair</option>
-              <option>Smarkets</option>
-              <option>Kalshi</option>
-              <option>SX.bet</option>
+              <option>Duel</option>
+              <option>BC.Game</option>
             </select>
           </label>
-          <label>Исход (как хедж) <input name="team" placeholder="команда / NO" /></label>
+          <label>Исход (хедж) <input name="team" placeholder="команда" /></label>
           <label>Кэф <input name="odds" type="number" step="0.01" min="1.01" /></label>
-          <button type="submit">Добавить кэф БК</button>
+          <button type="submit">Добавить кэф</button>
         </form>
       </section>
 
@@ -182,7 +175,9 @@
   <section id="view-settings" class="view hidden">
     <form id="setForm" class="settings">
       <p class="muted">Всё пишется в <code>data/settings.json</code> на этой машине. Ключ кошелька никуда не отправляется.</p>
-      <label>The Odds API key <input name="odds_api_key" placeholder="Pinnacle, 1xBet, Betfair, WH…" /></label>
+      <label>The Odds API key <input name="odds_api_key" placeholder="Pinnacle сам, если ключ есть" /></label>
+      <p class="muted">Ссылки твоих БК. Stake / Empire / Roobet / Shuffle / Mellstroy линию сами не отдают — только открыть и вписать кэф.</p>
+      <div id="bookUrls"></div>
       <label>SX.bet API key (опционально, для стакана) <input name="sx_api_key" /></label>
       <label>Telegram bot token <input name="telegram_bot_token" /></label>
       <label>Telegram chat id <input name="telegram_chat_id" /></label>
