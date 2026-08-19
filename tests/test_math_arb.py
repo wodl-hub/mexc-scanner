@@ -42,5 +42,16 @@ def test_parse_esports_title():
     assert away == "EDward Gaming"
 
 
+def test_hedge_cover_from_video_example():
+    from polyhedge.math_arb import hedge_cover
+
+    h = hedge_cover([1500, 750], current_shares=0)
+    assert h["needed_shares"] == 2250
+    assert h["delta_shares"] == 2250
+    assert h["matched"] is False
+    done = hedge_cover([1500, 750], current_shares=2250)
+    assert done["matched"] is True
+
+
 def test_team_pair_score_swapped():
     assert pair_score("Brazil", "Haiti", "Haiti", "Brazil") > 0.9

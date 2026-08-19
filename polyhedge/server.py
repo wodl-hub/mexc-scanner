@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -14,10 +16,21 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from polyhedge.math_arb import break_even_decimal_odds, quote_fork
+from polyhedge.alerts import send_telegram
+from polyhedge.math_arb import break_even_decimal_odds, hedge_cover, quote_fork
 from polyhedge.matcher import best_book_leg, best_game_match
 from polyhedge.odds_api import TAG_TO_SPORTS, OddsApiClient
 from polyhedge.polymarket import PolymarketClient
+from polyhedge.store import (
+    HIDDEN_PATH,
+    ORDERS_PATH,
+    PNL_PATH,
+    load_list,
+    load_settings,
+    public_settings,
+    save_list,
+    save_settings,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -28,7 +41,16 @@ _cache: dict[str, tuple[float, object]] = {}
 
 
 def _env(name: str) -> str:
-    return (os.getenv(name) or "").strip()
+    stored = load_settings()
+    mapping = {
+        "ODDS_API_KEY": stored.get("odds_api_key") or os.getenv("ODDS_API_KEY") or "",
+        "TELEGRAM_BOT_TOKEN": stored.get("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN") or "",
+        "TELEGRAM_CHAT_ID": stored.get("telegram_chat_id") or os.getenv("TELEGRAM_CHAT_ID") or "",
+        "POLYMARKET_PRIVATE_KEY": stored.get("polymarket_private_key")
+        or os.getenv("POLYMARKET_PRIVATE_KEY")
+        or "",
+    }
+    return str(mapping.get(name) or os.getenv(name) or "").strip()
 
 
 @asynccontextmanager
@@ -87,6 +109,46 @@ class CalcIn(BaseModel):
     include_rebate: bool = False
 
 
+class HedgeIn(BaseModel):
+    payouts: list[float] = Field(min_length=1)
+    current_shares: float = 0
+
+
+class SettingsIn(BaseModel):
+    odds_api_key: str | None = None
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+    polymarket_private_key: str | None = None
+    polymarket_funder: str | None = None
+    signature_type: int | None = None
+    stake_mirror: str | None = None
+    sound: bool | None = None
+    auto_refresh_sec: int | None = None
+    min_roi: float | None = None
+
+
+class PnlIn(BaseModel):
+    title: str
+    poly_price: float
+    book_odds: float
+    shares: float
+    profit: float
+    roi_pct: float
+    book: str = ""
+    note: str = ""
+
+
+class OrderIn(BaseModel):
+    title: str
+    token_id: str = ""
+    price: float
+    shares: float
+    book_odds: float
+    auto_cancel: bool = True
+    kill_off_min: int = 0
+    url: str = ""
+
+
 @app.get("/")
 async def index():
     path = STATIC / "index.html"
@@ -98,13 +160,63 @@ async def index():
 @app.get("/api/health")
 async def health():
     oc = odds_client()
+    s = load_settings()
     return {
         "ok": True,
         "odds_api": bool(oc),
         "telegram": bool(_env("TELEGRAM_BOT_TOKEN") and _env("TELEGRAM_CHAT_ID")),
         "trading": bool(_env("POLYMARKET_PRIVATE_KEY")),
-        "disclaimer": "Profit is locked only after both legs fill. This is a local tool, not financial advice.",
+        "sound": bool(s.get("sound")),
+        "auto_refresh_sec": s.get("auto_refresh_sec") or 20,
+        "disclaimer": "Profit is locked only after both legs fill. Local tool, not financial advice.",
     }
+
+
+@app.get("/api/settings")
+async def get_settings():
+    return public_settings()
+
+
+@app.post("/api/settings")
+async def post_settings(body: SettingsIn):
+    saved = save_settings(body.model_dump(exclude_none=True))
+    _cache.clear()
+    return public_settings() if saved else public_settings()
+
+
+@app.post("/api/telegram/detect")
+async def telegram_detect():
+    token = _env("TELEGRAM_BOT_TOKEN")
+    if not token:
+        raise HTTPException(400, "Сначала сохраните bot token")
+    assert _http is not None
+    r = await _http.get(f"https://api.telegram.org/bot{token}/getUpdates", timeout=20.0)
+    data = r.json()
+    if not data.get("ok"):
+        raise HTTPException(400, data.get("description") or "Telegram error")
+    chat_id = None
+    for upd in reversed(data.get("result") or []):
+        msg = upd.get("message") or upd.get("my_chat_member") or {}
+        chat = msg.get("chat") or {}
+        if chat.get("id") is not None:
+            chat_id = str(chat["id"])
+            break
+    if not chat_id:
+        raise HTTPException(404, "Напишите /start своему боту и нажмите Detect ещё раз")
+    save_settings({"telegram_chat_id": chat_id})
+    return {"chat_id": chat_id}
+
+
+@app.post("/api/telegram/test")
+async def telegram_test():
+    ok = await send_telegram(
+        _env("TELEGRAM_BOT_TOKEN"),
+        _env("TELEGRAM_CHAT_ID"),
+        "PolyHedge: тест алерта. Стол живой.",
+    )
+    if not ok:
+        raise HTTPException(400, "Не отправилось. Проверьте token и chat id.")
+    return {"ok": True}
 
 
 @app.get("/api/scan")
@@ -112,10 +224,15 @@ async def scan(
     tag: str = Query("sports"),
     hours: float | None = Query(default=72, ge=0, le=720),
     min_volume: float = Query(default=0, ge=0),
+    min_liq: float = Query(default=0, ge=0),
+    min_roi: float | None = Query(default=None),
+    phase: str = Query("all"),
     types: str = Query("moneyline,child_moneyline"),
-    limit: int = Query(60, ge=1, le=120),
+    limit: int = Query(80, ge=1, le=120),
 ):
-    cached = cache_get(f"scan:{tag}:{hours}:{min_volume}:{types}:{limit}", 15)
+    cached = cache_get(
+        f"scan:{tag}:{hours}:{min_volume}:{min_liq}:{min_roi}:{phase}:{types}:{limit}", 12
+    )
     if cached is not None:
         return cached
 
@@ -134,16 +251,28 @@ async def scan(
         else:
             games = g_cached  # type: ignore[assignment]
 
+    hidden = set(load_list(HIDDEN_PATH))
+    roi_floor = load_settings().get("min_roi") if min_roi is None else min_roi
+    try:
+        roi_floor = float(roi_floor or 0)
+    except (TypeError, ValueError):
+        roi_floor = 0.0
+
     rows = []
     for event in events:
+        if event["id"] in hidden or event.get("slug") in hidden:
+            continue
+        if phase not in ("all", "", None) and event.get("phase") != phase:
+            continue
         matched = best_game_match(event.get("home"), event.get("away"), games) if games else None
         for market in event["markets"]:
             if wanted and market["sports_type"] not in wanted:
                 continue
+            if min_liq and (market["liquidity"] or 0) < min_liq:
+                continue
             legs = market["legs"]
             if len(legs) < 2:
                 continue
-            # Gamma bestBid/bestAsk refer to outcome 0. Last prices are a fallback.
             p0 = legs[0].get("best_ask") or legs[0].get("last") or 0
             p1 = legs[1].get("last") or 0
             if p1 <= 0 and p0:
@@ -191,6 +320,10 @@ async def scan(
             if not quotes:
                 continue
             best_roi = max((q["fork"]["roi_pct"] for q in quotes if q.get("fork")), default=None)
+            if best_roi is not None and best_roi < roi_floor:
+                continue
+            if roi_floor > 0 and best_roi is None:
+                continue
             rows.append(
                 {
                     "event_id": event["id"],
@@ -229,7 +362,9 @@ async def scan(
         "odds_remaining": oc.remaining if oc else None,
         "rows": rows,
     }
-    cache_set(f"scan:{tag}:{hours}:{min_volume}:{types}:{limit}", payload)
+    cache_set(
+        f"scan:{tag}:{hours}:{min_volume}:{min_liq}:{min_roi}:{phase}:{types}:{limit}", payload
+    )
     return payload
 
 
@@ -265,6 +400,93 @@ async def calc(body: CalcIn):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return q.as_dict()
+
+
+@app.post("/api/hedge")
+async def hedge(body: HedgeIn):
+    try:
+        return hedge_cover(body.payouts, body.current_shares)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/pnl")
+async def pnl_list():
+    rows = load_list(PNL_PATH)
+    total = sum(float(r.get("profit") or 0) for r in rows)
+    return {"rows": rows, "total_profit": round(total, 4), "count": len(rows)}
+
+
+@app.post("/api/pnl")
+async def pnl_add(body: PnlIn):
+    rows = load_list(PNL_PATH)
+    item = body.model_dump()
+    item["id"] = str(uuid.uuid4())[:8]
+    item["ts"] = datetime.now(timezone.utc).isoformat()
+    rows.insert(0, item)
+    save_list(PNL_PATH, rows[:500])
+    return item
+
+
+@app.delete("/api/pnl/{item_id}")
+async def pnl_del(item_id: str):
+    rows = [r for r in load_list(PNL_PATH) if r.get("id") != item_id]
+    save_list(PNL_PATH, rows)
+    return {"ok": True}
+
+
+@app.get("/api/orders")
+async def orders_list():
+    return {"rows": load_list(ORDERS_PATH)}
+
+
+@app.post("/api/orders")
+async def orders_add(body: OrderIn):
+    rows = load_list(ORDERS_PATH)
+    item = body.model_dump()
+    item["id"] = str(uuid.uuid4())[:8]
+    item["ts"] = datetime.now(timezone.utc).isoformat()
+    item["status"] = "open"
+    rows.insert(0, item)
+    save_list(ORDERS_PATH, rows)
+    token = _env("TELEGRAM_BOT_TOKEN")
+    chat = _env("TELEGRAM_CHAT_ID")
+    if token and chat:
+        await send_telegram(
+            token,
+            chat,
+            f"Лимитка: {item['title']}\n{item['shares']} @ {item['price']}\nкф БК {item['book_odds']}",
+        )
+    return item
+
+
+@app.post("/api/orders/{item_id}/cancel")
+async def orders_cancel(item_id: str):
+    rows = load_list(ORDERS_PATH)
+    found = False
+    for row in rows:
+        if row.get("id") == item_id:
+            row["status"] = "cancelled"
+            found = True
+    if not found:
+        raise HTTPException(404, "order not found")
+    save_list(ORDERS_PATH, rows)
+    return {"ok": True}
+
+
+@app.get("/api/hidden")
+async def hidden_list():
+    return {"ids": load_list(HIDDEN_PATH)}
+
+
+@app.post("/api/hidden/{event_id}")
+async def hidden_add(event_id: str):
+    ids = load_list(HIDDEN_PATH)
+    if event_id not in ids:
+        ids.append(event_id)
+        save_list(HIDDEN_PATH, ids)
+    _cache.clear()
+    return {"ids": ids}
 
 
 @app.get("/api/event/{event_id}")

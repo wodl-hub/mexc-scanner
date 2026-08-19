@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PolyHedge — локальный стол</title>
+  <title>PolyHedge</title>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
@@ -15,7 +15,16 @@
         <small>локальный стол · Polymarket × книги</small>
       </div>
     </div>
-    <nav class="filters">
+    <nav class="tabs">
+      <button type="button" class="tab on" data-tab="desk">Стол</button>
+      <button type="button" class="tab" data-tab="pnl">P&L</button>
+      <button type="button" class="tab" data-tab="settings">Настройки</button>
+    </nav>
+    <div class="status" id="status">загрузка…</div>
+  </header>
+
+  <section id="view-desk" class="view">
+    <div class="filters">
       <label>Спорт
         <select id="tag">
           <option value="sports">все спорт</option>
@@ -24,86 +33,152 @@
           <option value="nba">NBA</option>
           <option value="nfl">NFL</option>
           <option value="tennis">теннис</option>
-          <option value="ufc">UFC / MMA</option>
+          <option value="ufc">UFC</option>
           <option value="nhl">NHL</option>
+          <option value="cs2">CS2</option>
+          <option value="lol">LoL</option>
         </select>
       </label>
-      <label>Тип
+      <label>Тип линии
         <select id="types">
           <option value="moneyline,child_moneyline">winner / карты</option>
-          <option value="moneyline">только match winner</option>
-          <option value="child_moneyline">только карты</option>
+          <option value="moneyline">match winner</option>
+          <option value="child_moneyline">карты / map</option>
           <option value="totals">тоталы</option>
           <option value="moneyline,child_moneyline,totals">winner + тоталы</option>
         </select>
       </label>
-      <label>Часы до старта
+      <label>Фаза
+        <select id="phase">
+          <option value="all">все</option>
+          <option value="prematch">prematch</option>
+          <option value="live">live</option>
+        </select>
+      </label>
+      <label>Часы
         <input id="hours" type="number" min="0" max="720" value="72" />
       </label>
-      <label>Мин. объём $
+      <label>Мин. объём
         <input id="minVolume" type="number" min="0" step="1000" value="0" />
       </label>
+      <label>Мин. ROI %
+        <input id="minRoi" type="number" step="0.1" value="0" />
+      </label>
+      <label>цены
+        <select id="pxMode">
+          <option value="cent">¢</option>
+          <option value="dec">кэф</option>
+        </select>
+      </label>
+      <label>сорт
+        <select id="sortBy">
+          <option value="roi">ROI</option>
+          <option value="volume">объём</option>
+          <option value="time">время</option>
+        </select>
+      </label>
+      <label class="check"><input id="sound" type="checkbox" checked /> звук</label>
       <button id="refresh" type="button">Обновить</button>
-    </nav>
-    <div class="status" id="status">загрузка…</div>
-  </header>
+    </div>
 
-  <main class="desk">
-    <section class="list-pane">
-      <div class="pane-head">
-        <h2>Рынки</h2>
-        <label class="check">цены
-          <select id="pxMode">
-            <option value="cent">¢</option>
-            <option value="dec">кэф</option>
-          </select>
-        </label>
-      </div>
-      <div id="rows" class="rows"></div>
-    </section>
+    <main class="desk">
+      <section class="list-pane">
+        <div class="pane-head"><h2>Вилки / рынки</h2><span id="rowCount" class="muted"></span></div>
+        <div id="rows" class="rows"></div>
+      </section>
 
-    <section class="book-pane">
-      <div class="pane-head">
-        <h2 id="selTitle">Стакан</h2>
-        <a id="polyLink" href="#" target="_blank" rel="noopener">Polymarket ↗</a>
-      </div>
-      <p class="muted" id="selMeta">Выберите рынок слева.</p>
-      <div class="books" id="books"></div>
-    </section>
+      <section class="book-pane">
+        <div class="pane-head">
+          <h2 id="selTitle">Стакан</h2>
+          <div class="ops">
+            <a id="polyLink" href="#" target="_blank" rel="noopener">Polymarket</a>
+            <button type="button" id="copyLink" class="ghost">копировать</button>
+            <button type="button" id="hideEvt" class="ghost">скрыть</button>
+            <button type="button" id="overlay" class="ghost">окно</button>
+          </div>
+        </div>
+        <p class="muted" id="selMeta">Выберите рынок слева.</p>
+        <div class="ticket">
+          <label>лимит ¢/цена <input id="limitPx" type="number" step="0.001" /></label>
+          <label>шейры <input id="limitSz" type="number" step="1" value="100" /></label>
+          <label>кф БК <input id="limitOdds" type="number" step="0.01" value="2" /></label>
+          <label class="check"><input id="autoCancel" type="checkbox" checked /> авто-отмена если вилка умерла</label>
+          <label>kill-off мин <input id="killOff" type="number" min="0" value="1" /></label>
+          <button type="button" id="placeLocal">поставить лимитку в журнал</button>
+        </div>
+        <div class="books" id="books"></div>
+      </section>
 
-    <section class="calc-pane">
-      <div class="pane-head"><h2>Калькулятор</h2></div>
-      <form id="calcForm" class="calc">
-        <label>Цена Polymarket (0–1)
-          <input name="poly_price" type="number" step="0.001" min="0.001" max="0.999" required />
-        </label>
-        <label>Кэф БК (десятичный)
-          <input name="book_odds" type="number" step="0.01" min="1.01" value="2.00" required />
-        </label>
-        <label>Шейры
-          <input name="shares" type="number" step="1" min="1" value="100" />
-        </label>
-        <label>Или ставка на БК $
-          <input name="hedge_stake" type="number" step="1" min="0" placeholder="необязательно" />
-        </label>
-        <label>Fee rate
-          <input name="fee_rate" type="number" step="0.01" min="0" max="1" value="0.05" />
-        </label>
-        <label class="check"><input name="taker" type="checkbox" /> покупка по рынку (taker fee)</label>
-        <label class="check"><input name="include_rebate" type="checkbox" /> оценить maker rebate</label>
-        <button type="submit">Посчитать</button>
+      <section class="side-pane">
+        <div class="pane-head"><h2>Калькулятор вилки</h2></div>
+        <form id="calcForm" class="calc">
+          <label>Цена Poly (0–1) <input name="poly_price" type="number" step="0.001" min="0.001" max="0.999" required /></label>
+          <label>Кэф БК <input name="book_odds" type="number" step="0.01" min="1.01" value="2.00" required /></label>
+          <label>Шейры <input name="shares" type="number" step="1" min="1" value="100" /></label>
+          <label>Или ставка БК $ <input name="hedge_stake" type="number" step="1" min="0" /></label>
+          <label>Fee rate <input name="fee_rate" type="number" step="0.01" min="0" max="1" value="0.05" /></label>
+          <label class="check"><input name="taker" type="checkbox" /> market / taker fee</label>
+          <label class="check"><input name="include_rebate" type="checkbox" /> оценить maker rebate</label>
+          <button type="submit">Посчитать</button>
+        </form>
+        <div id="calcOut" class="calc-out muted">Плюс только если обе ноги исполнились.</div>
+
+        <div class="pane-head"><h2>Хедж нескольких ставок</h2></div>
+        <form id="hedgeForm" class="calc">
+          <label>Выплаты БК через запятую <input name="payouts" placeholder="1500, 750" /></label>
+          <label>Уже куплено шейров <input name="current" type="number" step="1" value="0" /></label>
+          <button type="submit">Сколько шейров нужно</button>
+        </form>
+        <div id="hedgeOut" class="calc-out muted"></div>
+
+        <div class="pane-head"><h2>Журнал ордеров</h2></div>
+        <div id="orders" class="mini-list muted">пусто</div>
+      </section>
+    </main>
+  </section>
+
+  <section id="view-pnl" class="view hidden">
+    <div class="pnl-box">
+      <p>Сумма профита в журнале: <strong id="pnlTotal">$0</strong></p>
+      <form id="pnlForm" class="calc inline">
+        <input name="title" placeholder="событие" required />
+        <input name="profit" type="number" step="0.01" placeholder="профит $" required />
+        <input name="roi_pct" type="number" step="0.01" placeholder="ROI %" />
+        <input name="book" placeholder="БК" />
+        <button type="submit">Добавить</button>
       </form>
-      <div id="calcOut" class="calc-out muted">Плюс фиксируется только если обе ноги исполнились.</div>
-      <div class="note">
-        <p><strong>Это не копия SpreadCore.</strong> Ключи никуда не уходят. Котировки БК — вручную или через официальный The Odds API (Pinnacle и легальные книги), без скрейпа казино.</p>
-        <p>Вилка жива, пока кэф БК ≥ break-even. Автоотмена чужих ордеров на сервере третьей стороны здесь не нужна: ключ остаётся у вас.</p>
+      <div id="pnlRows" class="mini-list"></div>
+    </div>
+  </section>
+
+  <section id="view-settings" class="view hidden">
+    <form id="setForm" class="settings">
+      <p class="muted">Всё пишется в <code>data/settings.json</code> на этой машине. Ключ кошелька никуда не отправляется.</p>
+      <label>The Odds API key <input name="odds_api_key" placeholder="необязательно, Pinnacle и легальные книги" /></label>
+      <label>Telegram bot token <input name="telegram_bot_token" /></label>
+      <label>Telegram chat id <input name="telegram_chat_id" /></label>
+      <div class="row-btns">
+        <button type="button" id="tgDetect">Detect chat id</button>
+        <button type="button" id="tgTest">Тест алерта</button>
       </div>
-    </section>
-  </main>
+      <label>Polymarket private key (локально) <input name="polymarket_private_key" type="password" autocomplete="off" /></label>
+      <label>Funder address <input name="polymarket_funder" /></label>
+      <label>Тип подключения
+        <select name="signature_type">
+          <option value="2">2 — MetaMask / EOA</option>
+          <option value="1">1 — email / magic</option>
+        </select>
+      </label>
+      <label>Stake mirror URL <input name="stake_mirror" placeholder="https://..." /></label>
+      <label>Автообновление сек <input name="auto_refresh_sec" type="number" min="8" max="120" value="20" /></label>
+      <label class="check"><input name="sound" type="checkbox" checked /> звук новых вилок</label>
+      <button type="submit">Сохранить</button>
+      <p id="setMsg" class="muted"></p>
+    </form>
+  </section>
 
   <footer class="foot">
-    PolyHedge считает комиссию по формуле Polymarket <code>shares × rate × p × (1−p)</code>.
-    Не финсовет. Соблюдайте правила площадок и местное право.
+    Комиссия Polymarket: <code>shares × rate × p × (1−p)</code>. Не финсовет.
   </footer>
   <script src="/static/app.js"></script>
 </body>

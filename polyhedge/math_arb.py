@@ -152,3 +152,18 @@ def hedge_stake_for_shares(shares: float, book_odds: float) -> float:
     if book_odds <= 0:
         raise ValueError("book_odds must be positive")
     return shares / book_odds
+
+
+def hedge_cover(payouts: list[float], current_shares: float = 0.0) -> dict:
+    """How many Polymarket shares are needed to cover BK payouts."""
+    clean = [float(x) for x in payouts if float(x) > 0]
+    needed = round(sum(clean), 4)
+    have = float(current_shares or 0)
+    delta = round(needed - have, 4)
+    return {
+        "needed_shares": needed,
+        "current_shares": have,
+        "delta_shares": delta,
+        "matched": abs(delta) < 0.51,
+        "legs": len(clean),
+    }
