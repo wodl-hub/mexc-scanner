@@ -108,6 +108,27 @@ def test_parse_home_at_away():
     assert away == "Los Angeles Sparks"
 
 
+def test_yes_no_moneyline_maps_to_teams():
+    from polyhedge.polymarket import _expand_yes_no_legs
+
+    market = {
+        "question": "Will Club Atlético de Madrid win on 2026-08-19?",
+        "legs": [{"name": "Yes"}, {"name": "No"}],
+    }
+    _expand_yes_no_legs(market, "Club Atlético de Madrid", "Málaga CF")
+    assert market["legs"][0]["name"] == "Club Atlético de Madrid"
+    assert market["legs"][1]["name"] == "Málaga CF"
+
+
+def test_accent_and_nickname_match():
+    from polyhedge.matcher import _ratio
+
+    assert _ratio("Atlético Madrid", "Atletico Madrid") == 1.0
+    assert _ratio("49ers", "San Francisco 49ers") >= 0.9
+    assert _ratio("Jets", "New York Jets") >= 0.9
+    assert pair_score("Jets", "Steelers", "New York", "Pittsburgh") >= 0.9
+
+
 def test_smarkets_ticks_to_decimal():
     from polyhedge.smarkets import ticks_to_decimal
 

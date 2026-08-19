@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+
+from polyhedge.matcher import _ratio
 
 GAMMA = "https://gamma-api.polymarket.com"
 CLOB = "https://clob.polymarket.com"
@@ -63,6 +66,38 @@ def parse_vs(title: str) -> tuple[str | None, str | None]:
             right = right.split(" - ")[0].split("(")[0].strip(" .")
             return left.strip(), right.strip()
     return None, None
+
+
+_WILL_WIN = re.compile(r"will\s+(.+?)\s+win\b", re.I)
+
+
+def _expand_yes_no_legs(market: dict, home: str | None, away: str | None) -> None:
+    """Map Yes/No moneylines onto actual team names so books can hedge."""
+    legs = market.get("legs") or []
+    if len(legs) != 2:
+        return
+    names = [(leg.get("name") or "").strip().lower() for leg in legs]
+    if set(names) != {"yes", "no"}:
+        return
+    question = market.get("question") or ""
+    match = _WILL_WIN.search(question)
+    mentioned = (match.group(1) if match else "") or (market.get("group") or "")
+    yes_team, no_team = home, away
+    if mentioned and home and away:
+        if _ratio(mentioned, away) > _ratio(mentioned, home):
+            yes_team, no_team = away, home
+        else:
+            yes_team, no_team = home, away
+    elif mentioned:
+        yes_team, no_team = mentioned, None
+    yes_i = 0 if names[0] == "yes" else 1
+    no_i = 1 - yes_i
+    if yes_team:
+        legs[yes_i]["name"] = yes_team
+        legs[yes_i]["binary"] = "Yes"
+    if no_team:
+        legs[no_i]["name"] = no_team
+        legs[no_i]["binary"] = "No"
 
 
 def classify_phase(start_iso: str | None) -> str:
@@ -127,6 +162,8 @@ class PolymarketClient:
         tags = [t.get("slug") for t in (event.get("tags") or []) if isinstance(t, dict)]
         markets = [self._normalize_market(m, event) for m in (event.get("markets") or [])]
         markets = [m for m in markets if m]
+        for market in markets:
+            _expand_yes_no_legs(market, home, away)
         return {
             "id": str(event.get("id")),
             "slug": event.get("slug"),
