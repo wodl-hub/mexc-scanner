@@ -7,11 +7,15 @@
 ## Что умеет
 
 - Сканер спортивных событий Polymarket (Gamma API) + стакан CLOB
+- Вторые ноги с **публичных** API, не с парсера казино:
+  - **SX.bet** — moneyline / winner + кэфы из публичных ордеров
+  - **Smarkets** — winner / FT result
+  - **Kalshi** — серии GAME/MATCH (NFL, MLB, EPL, UCL…)
+  - **The Odds API** (ключ) — Pinnacle, 1xBet, Betfair, William Hill и другие легальные книги
+  - ручной кэф для Stake / Empire / Roobet и всего, у чего нет открытого API
 - Калькулятор двух ног: шейры на Polymarket ↔ десятичный кэф на БК
 - Taker fee: `shares × fee_rate × p × (1 − p)` (спорт обычно `0.05`)
 - Maker без комиссии; rebate только как оценка, не как гарантия
-- Опционально [The Odds API](https://the-odds-api.com) для Pinnacle и других **официальных** книг
-- Ручной ввод кэфа, если API нет (Stake / Empire / казино сами не парсятся)
 
 ## Чего нет и не будет
 
@@ -58,7 +62,7 @@ pytest -q
 ODDS_API_KEY=...
 ```
 
-Без ключа стол всё равно работает: рынки Polymarket + ручной кэф.
+Без ключа стол всё равно тянет SX.bet, Smarkets и Kalshi. Stake и казино — только ручной кэф.
 
 ## Важно
 

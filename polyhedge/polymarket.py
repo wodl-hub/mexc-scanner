@@ -57,7 +57,7 @@ def parse_vs(title: str) -> tuple[str | None, str | None]:
     raw = (title or "").strip()
     if ":" in raw and " vs" in raw.lower():
         raw = raw.split(":", 1)[1].strip()
-    for sep in (" vs. ", " vs ", " VS ", " v "):
+    for sep in (" vs. ", " vs ", " VS ", " v ", " at ", " @ "):
         if sep in raw:
             left, right = raw.split(sep, 1)
             right = right.split(" - ")[0].split("(")[0].strip(" .")

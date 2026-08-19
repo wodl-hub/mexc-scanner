@@ -14,9 +14,11 @@ SETTINGS_PATH = DATA / "settings.json"
 PNL_PATH = DATA / "pnl.json"
 ORDERS_PATH = DATA / "orders.json"
 HIDDEN_PATH = DATA / "hidden.json"
+MANUAL_PATH = DATA / "manual_books.json"
 
 DEFAULT_SETTINGS = {
     "odds_api_key": "",
+    "sx_api_key": "",
     "telegram_bot_token": "",
     "telegram_chat_id": "",
     "polymarket_private_key": "",
@@ -67,6 +69,7 @@ def public_settings() -> dict:
     s = load_settings()
     key = s.get("polymarket_private_key") or ""
     odds = s.get("odds_api_key") or ""
+    sx = s.get("sx_api_key") or ""
     tg = s.get("telegram_bot_token") or ""
     return {
         **{k: v for k, v in s.items() if k != "polymarket_private_key"},
@@ -75,6 +78,7 @@ def public_settings() -> dict:
         "has_odds_key": bool(odds),
         "has_telegram": bool(tg and s.get("telegram_chat_id")),
         "odds_api_key": ("*" * 4 + odds[-4:]) if len(odds) > 6 else odds,
+        "sx_api_key": ("*" * 4 + sx[-4:]) if len(sx) > 6 else sx,
         "telegram_bot_token": ("*" * 4 + tg[-4:]) if len(tg) > 6 else tg,
     }
 

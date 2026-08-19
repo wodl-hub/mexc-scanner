@@ -62,7 +62,7 @@ function renderRows() {
   const rows = sortedRows(state.rows);
   $("rowCount").textContent = `${rows.length}`;
   if (!rows.length) {
-    box.innerHTML = `<div class="muted">Нет рынков. Без Odds API ROI пустой — смотрите break-even и вписывайте кэф БК.</div>`;
+    box.innerHTML = `<div class="muted">Нет рынков. Включите SX / Smarkets / Kalshi / Odds API или впишите кэф вручную.</div>`;
     return;
   }
   box.innerHTML = rows.map((row) => {
@@ -70,7 +70,9 @@ function renderRows() {
     const q0 = row.quotes[0];
     const roi = row.best_roi;
     const roiTxt = roi == null ? `BE ${q0 ? q0.break_even_maker.toFixed(2) : "—"}` : `${roi.toFixed(2)}%`;
-    const book = q0 && q0.book ? `${q0.book.book} ${q0.book.odds}` : "";
+      const book = (q0 && q0.book && q0.book.odds)
+        ? `${q0.book.book} ${q0.book.odds}`
+        : ((q0 && q0.books && q0.books.length) ? q0.books.map((b) => b.book).filter(Boolean).slice(0, 3).join(", ") : "");
     return `<article class="row ${state.selected === i ? "on" : ""}" data-i="${i}">
       <div class="t">${row.title}</div>
       <div class="s">
@@ -83,6 +85,22 @@ function renderRows() {
     </article>`;
   }).join("");
   box.querySelectorAll(".row").forEach((el) => el.addEventListener("click", () => selectRow(Number(el.dataset.i))));
+}
+
+function renderVenueBooks(row) {
+  const box = $("venueBooks");
+  const q0 = row.quotes[0];
+  const books = (q0 && q0.books) || [];
+  if (!books.length) {
+    box.textContent = "нет авто-матча — впишите кэф БК ниже";
+    return;
+  }
+  box.innerHTML = books.map((b) => {
+    const roi = b.fork ? `${b.fork.roi_pct.toFixed(2)}%` : "нет цены";
+    const odds = b.odds ? b.odds : "—";
+    const href = b.url ? `<a href="${b.url}" target="_blank">${b.book}</a>` : b.book;
+    return `<div class="mini-item"><span>${href} · ${b.team || ""} @ ${odds}</span><span class="${roiClass(b.fork ? b.fork.roi_pct : null)}">${roi}</span></div>`;
+  }).join("");
 }
 
 async function selectRow(i) {
@@ -99,11 +117,13 @@ async function selectRow(i) {
     form.poly_price.value = q0.poly_price;
     form.fee_rate.value = row.fee_rate;
     $("limitPx").value = q0.poly_price;
-    if (q0.book) {
+    if (q0.book && q0.book.odds) {
       form.book_odds.value = q0.book.odds;
       $("limitOdds").value = q0.book.odds;
     }
   }
+  renderVenueBooks(row);
+  $("manualForm").team.value = q0 ? q0.hedge_team : "";
   const books = $("books");
   books.innerHTML = `<div class="muted">стакан…</div>`;
   const panes = await Promise.all(row.quotes.map(async (q) => {
@@ -142,6 +162,13 @@ async function scan(opts = {}) {
     hours: $("hours").value || "72",
     min_volume: $("minVolume").value || "0",
     min_roi: $("minRoi").value || "0",
+    venues: [
+      $("vSx").checked ? "sx" : "",
+      $("vSmarkets").checked ? "smarkets" : "",
+      $("vKalshi").checked ? "kalshi" : "",
+      $("vOdds").checked ? "odds" : "",
+      $("vManual").checked ? "manual" : "",
+    ].filter(Boolean).join(",") || "manual",
   });
   try {
     const data = await getJson(`/api/scan?${params}`);
@@ -155,8 +182,14 @@ async function scan(opts = {}) {
       }
     }
     if (fresh) beep();
-    const odds = data.odds_api ? `Odds API ${data.odds_remaining ?? ""}` : "ручной кэф БК";
-    $("status").textContent = `${data.count} рынков · ${odds}`;
+    const v = data.venues || {};
+    const bits = [
+      `SX ${v.sx_games ?? 0}`,
+      `Smarkets ${v.smarkets_games ?? 0}`,
+      `Kalshi ${v.kalshi_games ?? 0}`,
+    ];
+    if (data.odds_api) bits.push(`Odds API ${data.odds_remaining ?? (v.odds_games ?? "")}`.trim());
+    $("status").textContent = `${data.count} рынков · ${bits.join(" · ")}`;
     renderRows();
     if (!opts.keep && state.rows.length) selectRow(0);
     else if (state.selected != null) selectRow(state.selected);
@@ -260,7 +293,23 @@ $("hedgeForm").addEventListener("submit", async (e) => {
   }
 });
 
-$("placeLocal").addEventListener("click", async () => {
+$("manualForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const row = currentRow();
+  if (!row) return;
+  const f = e.target;
+  await getJson("/api/manual", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      event_id: row.event_id,
+      book: f.book.value,
+      team: f.team.value,
+      odds: Number(f.odds.value),
+    }),
+  });
+  scan({ keep: true });
+});
   const row = currentRow();
   if (!row) return;
   const q0 = row.quotes[0] || {};
@@ -336,6 +385,7 @@ $("setForm").addEventListener("submit", async (e) => {
     sound: f.sound.checked,
   };
   if (f.odds_api_key.value && !f.odds_api_key.value.startsWith("*")) body.odds_api_key = f.odds_api_key.value;
+  if (f.sx_api_key.value && !f.sx_api_key.value.startsWith("*")) body.sx_api_key = f.sx_api_key.value;
   if (f.telegram_bot_token.value && !f.telegram_bot_token.value.startsWith("*")) body.telegram_bot_token = f.telegram_bot_token.value;
   if (f.polymarket_private_key.value) body.polymarket_private_key = f.polymarket_private_key.value;
   await getJson("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -360,7 +410,7 @@ $("tgTest").addEventListener("click", async () => {
 
 document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => setTab(t.dataset.tab)));
 $("refresh").addEventListener("click", () => scan());
-["tag", "types", "phase", "hours", "minVolume", "minRoi", "sortBy"].forEach((id) => $(id).addEventListener("change", () => scan()));
+["tag", "types", "phase", "hours", "minVolume", "minRoi", "sortBy", "vSx", "vSmarkets", "vKalshi", "vOdds", "vManual"].forEach((id) => $(id).addEventListener("change", () => scan()));
 $("pxMode").addEventListener("change", (e) => {
   state.pxMode = e.target.value;
   renderRows();

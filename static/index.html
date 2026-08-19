@@ -12,7 +12,7 @@
       <span class="mark">⬡</span>
       <div>
         <strong>PolyHedge</strong>
-        <small>локальный стол · Polymarket × книги</small>
+        <small>локальный стол · Polymarket × биржи и БК</small>
       </div>
     </div>
     <nav class="tabs">
@@ -64,6 +64,11 @@
       <label>Мин. ROI %
         <input id="minRoi" type="number" step="0.1" value="0" />
       </label>
+      <label class="check"><input id="vSx" type="checkbox" checked /> SX.bet</label>
+      <label class="check"><input id="vSmarkets" type="checkbox" checked /> Smarkets</label>
+      <label class="check"><input id="vKalshi" type="checkbox" checked /> Kalshi</label>
+      <label class="check"><input id="vOdds" type="checkbox" checked /> Odds API (Pinnacle, 1xBet, Betfair…)</label>
+      <label class="check"><input id="vManual" type="checkbox" checked /> ручные БК</label>
       <label>цены
         <select id="pxMode">
           <option value="cent">¢</option>
@@ -107,6 +112,29 @@
           <button type="button" id="placeLocal">поставить лимитку в журнал</button>
         </div>
         <div class="books" id="books"></div>
+        <div class="pane-head"><h2>Кэфы площадок</h2></div>
+        <div id="venueBooks" class="mini-list muted">нет совпадений</div>
+        <form id="manualForm" class="calc">
+          <label>БК
+            <select name="book">
+              <option>Stake</option>
+              <option>Pinnacle</option>
+              <option>Empire</option>
+              <option>Duel</option>
+              <option>Roobet</option>
+              <option>BC.Game</option>
+              <option>Mellstroy</option>
+              <option>1xBet</option>
+              <option>Betfair</option>
+              <option>Smarkets</option>
+              <option>Kalshi</option>
+              <option>SX.bet</option>
+            </select>
+          </label>
+          <label>Исход (как хедж) <input name="team" placeholder="команда / NO" /></label>
+          <label>Кэф <input name="odds" type="number" step="0.01" min="1.01" /></label>
+          <button type="submit">Добавить кэф БК</button>
+        </form>
       </section>
 
       <section class="side-pane">
@@ -154,7 +182,8 @@
   <section id="view-settings" class="view hidden">
     <form id="setForm" class="settings">
       <p class="muted">Всё пишется в <code>data/settings.json</code> на этой машине. Ключ кошелька никуда не отправляется.</p>
-      <label>The Odds API key <input name="odds_api_key" placeholder="необязательно, Pinnacle и легальные книги" /></label>
+      <label>The Odds API key <input name="odds_api_key" placeholder="Pinnacle, 1xBet, Betfair, WH…" /></label>
+      <label>SX.bet API key (опционально, для стакана) <input name="sx_api_key" /></label>
       <label>Telegram bot token <input name="telegram_bot_token" /></label>
       <label>Telegram chat id <input name="telegram_chat_id" /></label>
       <div class="row-btns">

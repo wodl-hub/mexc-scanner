@@ -53,5 +53,79 @@ def test_hedge_cover_from_video_example():
     assert done["matched"] is True
 
 
+def test_sx_percentage_to_decimal():
+    from polyhedge.sxbet import _pct_to_decimal, taker_decimal_from_maker
+
+    # 50% implied → 2.0 decimal
+    assert abs(_pct_to_decimal("50000000000000000000") - 2.0) < 1e-6
+    # Maker on 58.75% → taker opposite ≈ 2.424
+    assert abs(taker_decimal_from_maker("58750000000000000000") - (1 / 0.4125)) < 1e-5
+
+
+def test_sx_skips_golf_outright_leagues():
+    from polyhedge.sxbet import _game_from_market
+
+    assert (
+        _game_from_market(
+            {
+                "type": 52,
+                "teamOneName": "A",
+                "teamTwoName": "B",
+                "leagueLabel": "Top 5 (Including Ties)",
+                "marketHash": "0x1",
+            }
+        )
+        is None
+    )
+    game = _game_from_market(
+        {
+            "type": 226,
+            "teamOneName": "Los Angeles Rams",
+            "teamTwoName": "San Francisco 49ers",
+            "leagueLabel": "NFL",
+            "marketHash": "0xabc",
+            "gameTime": 1789086900,
+        }
+    )
+    assert game and game["home"] == "Los Angeles Rams"
+
+
 def test_team_pair_score_swapped():
     assert pair_score("Brazil", "Haiti", "Haiti", "Brazil") > 0.9
+
+
+def test_city_matches_full_nfl_name():
+    assert pair_score("Las Vegas", "Houston", "Las Vegas Raiders", "Houston Texans") >= 0.9
+
+
+def test_esports_org_names():
+    assert pair_score("Team WE", "EDward Gaming", "Team We", "Edward Gaming") >= 0.9
+
+
+def test_parse_home_at_away():
+    home, away = parse_title("Atlanta Dream at Los Angeles Sparks")
+    assert home == "Atlanta Dream"
+    assert away == "Los Angeles Sparks"
+
+
+def test_smarkets_ticks_to_decimal():
+    from polyhedge.smarkets import ticks_to_decimal
+
+    assert abs(ticks_to_decimal(5000) - 2.0) < 1e-6
+    assert ticks_to_decimal(0) is None
+    assert ticks_to_decimal(10000) is None
+
+
+def test_all_book_legs_keep_unpriced_listing():
+    from polyhedge.matcher import all_book_legs
+
+    games = [
+        {
+            "venue": "sx",
+            "books": [{"book": "SX.bet", "key": "sx", "outcomes": {}, "url": "https://sx.bet/x"}],
+        }
+    ]
+    legs = all_book_legs(games, "Rams")
+    assert legs and legs[0]["listed"] is True
+    assert legs[0]["odds"] is None
+

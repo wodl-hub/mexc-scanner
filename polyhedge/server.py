@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 import uuid
@@ -17,12 +18,15 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from polyhedge.alerts import send_telegram
+from polyhedge.kalshi import KalshiClient
 from polyhedge.math_arb import break_even_decimal_odds, hedge_cover, quote_fork
-from polyhedge.matcher import best_book_leg, best_game_match
+from polyhedge.matcher import all_book_legs, all_game_matches
 from polyhedge.odds_api import TAG_TO_SPORTS, OddsApiClient
 from polyhedge.polymarket import PolymarketClient
+from polyhedge.smarkets import SmarketsClient
 from polyhedge.store import (
     HIDDEN_PATH,
+    MANUAL_PATH,
     ORDERS_PATH,
     PNL_PATH,
     load_list,
@@ -31,6 +35,7 @@ from polyhedge.store import (
     save_list,
     save_settings,
 )
+from polyhedge.sxbet import SxClient
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -49,6 +54,7 @@ def _env(name: str) -> str:
         "POLYMARKET_PRIVATE_KEY": stored.get("polymarket_private_key")
         or os.getenv("POLYMARKET_PRIVATE_KEY")
         or "",
+        "SX_API_KEY": stored.get("sx_api_key") or os.getenv("SX_API_KEY") or "",
     }
     return str(mapping.get(name) or os.getenv(name) or "").strip()
 
@@ -98,6 +104,114 @@ def odds_client() -> OddsApiClient | None:
     return OddsApiClient(_http, key)
 
 
+async def _cached_fetch(key: str, ttl: float, factory):
+    cached = cache_get(key, ttl)
+    if cached is not None:
+        return cached, None
+    try:
+        data = await factory()
+        cache_set(key, data)
+        return data, None
+    except Exception as exc:
+        return [], str(exc)[:180]
+
+
+async def collect_venue_games(tag: str, venues: set[str]) -> tuple[list[dict], dict]:
+    assert _http is not None
+    status = {
+        "odds": False,
+        "sx": False,
+        "kalshi": False,
+        "smarkets": False,
+        "odds_remaining": None,
+        "sx_games": 0,
+        "kalshi_games": 0,
+        "smarkets_games": 0,
+        "odds_games": 0,
+        "errors": {},
+    }
+    jobs = []
+
+    async def pull_odds():
+        oc = odds_client()
+        if not oc:
+            return "odds", [], None, oc
+        keys = TAG_TO_SPORTS.get(tag.lower(), TAG_TO_SPORTS["sports"])
+        if not keys:
+            return "odds", [], None, oc
+        data, err = await _cached_fetch(f"odds:{tag}", 45, lambda: oc.fetch_h2h(keys))
+        for g in data:
+            g["venue"] = "odds"
+        return "odds", data, err, oc
+
+    async def pull_sx():
+        data, err = await _cached_fetch(
+            f"sx:ml:{tag}",
+            40,
+            lambda: SxClient(_http, _env("SX_API_KEY")).fetch_moneylines(tag=tag, fill_odds=True),
+        )
+        return "sx", data, err, None
+
+    async def pull_kalshi():
+        data, err = await _cached_fetch(
+            f"kalshi:{tag}",
+            60,
+            lambda: KalshiClient(_http).fetch_sports(tag=tag),
+        )
+        return "kalshi", data, err, None
+
+    async def pull_smarkets():
+        data, err = await _cached_fetch(
+            f"smarkets:{tag}",
+            50,
+            lambda: SmarketsClient(_http).fetch_event_names(tag=tag, per_type=28),
+        )
+        return "smarkets", data, err, None
+
+    if "odds" in venues:
+        jobs.append(pull_odds())
+    if "sx" in venues:
+        jobs.append(pull_sx())
+    if "kalshi" in venues:
+        jobs.append(pull_kalshi())
+    if "smarkets" in venues:
+        jobs.append(pull_smarkets())
+
+    games: list[dict] = []
+    if jobs:
+        for item in await asyncio.gather(*jobs):
+            name, data, err, extra = item
+            if err:
+                status["errors"][name] = err
+            if name == "odds":
+                oc = extra
+                status["odds"] = bool(odds_client())
+                status["odds_games"] = len(data)
+                if oc:
+                    status["odds_remaining"] = oc.remaining
+            else:
+                status[name] = not err
+                status[f"{name}_games"] = len(data)
+            games.extend(data)
+    return games, status
+
+
+async def hydrate_smarkets(games: list[dict], events: list[dict]) -> None:
+    need: set[str] = set()
+    for event in events:
+        for g in all_game_matches(event.get("home"), event.get("away"), games):
+            if g.get("venue") == "smarkets" and g.get("id"):
+                need.add(str(g["id"]))
+    originals = [
+        g
+        for g in games
+        if g.get("venue") == "smarkets" and str(g.get("id")) in need and not g.get("outcomes")
+    ]
+    if originals:
+        assert _http is not None
+        await SmarketsClient(_http).fill_winners(originals)
+
+
 class CalcIn(BaseModel):
     poly_price: float = Field(gt=0, lt=1)
     book_odds: float = Field(gt=1)
@@ -116,6 +230,7 @@ class HedgeIn(BaseModel):
 
 class SettingsIn(BaseModel):
     odds_api_key: str | None = None
+    sx_api_key: str | None = None
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     polymarket_private_key: str | None = None
@@ -136,6 +251,14 @@ class PnlIn(BaseModel):
     roi_pct: float
     book: str = ""
     note: str = ""
+
+
+class ManualBookIn(BaseModel):
+    event_id: str
+    book: str
+    team: str
+    odds: float = Field(gt=1)
+    url: str = ""
 
 
 class OrderIn(BaseModel):
@@ -164,6 +287,9 @@ async def health():
     return {
         "ok": True,
         "odds_api": bool(oc),
+        "sx": True,
+        "kalshi": True,
+        "smarkets": True,
         "telegram": bool(_env("TELEGRAM_BOT_TOKEN") and _env("TELEGRAM_CHAT_ID")),
         "trading": bool(_env("POLYMARKET_PRIVATE_KEY")),
         "sound": bool(s.get("sound")),
@@ -228,10 +354,11 @@ async def scan(
     min_roi: float | None = Query(default=None),
     phase: str = Query("all"),
     types: str = Query("moneyline,child_moneyline"),
+    venues: str = Query("sx,smarkets,kalshi,odds,manual"),
     limit: int = Query(80, ge=1, le=120),
 ):
     cached = cache_get(
-        f"scan:{tag}:{hours}:{min_volume}:{min_liq}:{min_roi}:{phase}:{types}:{limit}", 12
+        f"scan:{tag}:{hours}:{min_volume}:{min_liq}:{min_roi}:{phase}:{types}:{venues}:{limit}", 12
     )
     if cached is not None:
         return cached
@@ -240,16 +367,11 @@ async def scan(
         tag=tag, limit=limit, hours_ahead=hours, min_volume=min_volume
     )
     wanted = {t.strip() for t in types.split(",") if t.strip()}
-    games: list[dict] = []
-    oc = odds_client()
-    if oc:
-        sport_keys = TAG_TO_SPORTS.get(tag.lower(), TAG_TO_SPORTS["sports"])
-        g_cached = cache_get(f"odds:{tag}", 45)
-        if g_cached is None:
-            games = await oc.fetch_h2h(sport_keys)
-            cache_set(f"odds:{tag}", games)
-        else:
-            games = g_cached  # type: ignore[assignment]
+    venue_set = {v.strip() for v in venues.split(",") if v.strip()}
+    games, venue_status = await collect_venue_games(tag, venue_set)
+    if "smarkets" in venue_set:
+        await hydrate_smarkets(games, events)
+    manual_rows = load_list(MANUAL_PATH) if "manual" in venue_set else []
 
     hidden = set(load_list(HIDDEN_PATH))
     roi_floor = load_settings().get("min_roi") if min_roi is None else min_roi
@@ -264,7 +386,25 @@ async def scan(
             continue
         if phase not in ("all", "", None) and event.get("phase") != phase:
             continue
-        matched = best_game_match(event.get("home"), event.get("away"), games) if games else None
+        matched_games = all_game_matches(event.get("home"), event.get("away"), games) if games else []
+        manuals = [m for m in manual_rows if m.get("event_id") == event["id"]]
+        if manuals:
+            matched_games.append(
+                {
+                    "home": event.get("home"),
+                    "away": event.get("away"),
+                    "venue": "manual",
+                    "books": [
+                        {
+                            "book": m.get("book"),
+                            "key": "manual",
+                            "outcomes": {m.get("team"): m.get("odds")},
+                            "url": m.get("url") or "",
+                        }
+                        for m in manuals
+                    ],
+                }
+            )
         for market in event["markets"]:
             if wanted and market["sports_type"] not in wanted:
                 continue
@@ -285,22 +425,27 @@ async def scan(
                 if price <= 0.01 or price >= 0.99:
                     continue
                 opposite = legs[1 - idx]["name"]
-                book_leg = None
-                fork = None
-                if matched:
-                    book_leg = best_book_leg(matched, opposite)
-                    if book_leg:
+                book_legs = all_book_legs(matched_games, opposite) if matched_games else []
+                priced = []
+                for bl in book_legs:
+                    fork = None
+                    if bl.get("odds"):
                         try:
                             fork = quote_fork(
                                 shares=100,
                                 poly_price=price,
-                                book_odds=book_leg["odds"],
+                                book_odds=float(bl["odds"]),
                                 fee_rate=market["fee_rate"],
                                 taker=False,
                                 rebate_rate=market["rebate_rate"],
                             ).as_dict()
                         except ValueError:
                             fork = None
+                    priced.append({**bl, "fork": fork})
+                best = None
+                with_fork = [p for p in priced if p.get("fork")]
+                if with_fork:
+                    best = max(with_fork, key=lambda x: x["fork"]["roi_pct"])
                 quotes.append(
                     {
                         "poly_team": leg["name"],
@@ -313,8 +458,9 @@ async def scan(
                         "break_even_taker": round(
                             break_even_decimal_odds(price, market["fee_rate"], taker=True), 4
                         ),
-                        "book": book_leg,
-                        "fork": fork,
+                        "book": best,
+                        "books": priced,
+                        "fork": (best or {}).get("fork") if best else None,
                     }
                 )
             if not quotes:
@@ -342,14 +488,17 @@ async def scan(
                     "url": market["url"],
                     "home": event["home"],
                     "away": event["away"],
-                    "odds_match": {
-                        "home": matched.get("home"),
-                        "away": matched.get("away"),
-                        "score": matched.get("match_score"),
-                        "sport": matched.get("sport"),
-                    }
-                    if matched
-                    else None,
+                    "venues": [
+                        {
+                            "book": g.get("book") or g.get("venue"),
+                            "venue": g.get("venue"),
+                            "home": g.get("home"),
+                            "away": g.get("away"),
+                            "score": g.get("match_score"),
+                            "url": g.get("url"),
+                        }
+                        for g in matched_games
+                    ],
                     "quotes": quotes,
                     "best_roi": best_roi,
                 }
@@ -358,12 +507,14 @@ async def scan(
     rows.sort(key=lambda r: (r["best_roi"] is None, -(r["best_roi"] or 0), -r["volume24hr"]))
     payload = {
         "count": len(rows),
-        "odds_api": bool(oc),
-        "odds_remaining": oc.remaining if oc else None,
+        "venues": venue_status,
+        "odds_api": bool(venue_status.get("odds")),
+        "odds_remaining": venue_status.get("odds_remaining"),
         "rows": rows,
     }
     cache_set(
-        f"scan:{tag}:{hours}:{min_volume}:{min_liq}:{min_roi}:{phase}:{types}:{limit}", payload
+        f"scan:{tag}:{hours}:{min_volume}:{min_liq}:{min_roi}:{phase}:{types}:{venues}:{limit}",
+        payload,
     )
     return payload
 
@@ -487,6 +638,29 @@ async def hidden_add(event_id: str):
         save_list(HIDDEN_PATH, ids)
     _cache.clear()
     return {"ids": ids}
+
+
+@app.get("/api/manual")
+async def manual_list(event_id: str | None = None):
+    rows = load_list(MANUAL_PATH)
+    if event_id:
+        rows = [r for r in rows if r.get("event_id") == event_id]
+    return {"rows": rows}
+
+
+@app.post("/api/manual")
+async def manual_add(body: ManualBookIn):
+    rows = load_list(MANUAL_PATH)
+    item = body.model_dump()
+    rows = [
+        r
+        for r in rows
+        if not (r.get("event_id") == item["event_id"] and r.get("book") == item["book"] and r.get("team") == item["team"])
+    ]
+    rows.append(item)
+    save_list(MANUAL_PATH, rows)
+    _cache.clear()
+    return item
 
 
 @app.get("/api/event/{event_id}")
